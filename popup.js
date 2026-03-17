@@ -92,10 +92,10 @@ async function fetchDetailedCert(hostname) {
   if (!detailsEl) return;
 
   try {
-    // 使用 crt.sh API 查询证书信息
-    const apiUrl = `https://crt.sh/?q=${encodeURIComponent(hostname)}&output=json`;
+    // 使用 certspotter API（支持 CORS）
+    const apiUrl = `https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(hostname)}&include_subdomains=false&expand=dns_names&expand=issuer&expand=cert`;
     const resp = await fetch(apiUrl);
-    if (!resp.ok) throw new Error('API 请求失败');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
 
     if (!data || data.length === 0) {
@@ -112,72 +112,72 @@ async function fetchDetailedCert(hostname) {
       return;
     }
 
-    // 按过期时间排序，取最新的有效证书
     const now = new Date();
-    const sortedCerts = data.sort((a, b) => new Date(b.not_after) - new Date(a.not_after));
-    
-    // 显示所有找到的证书
+    // 按到期时间排序，最新的在前
+    const sorted = data.sort((a, b) =>
+      new Date(b.not_after || 0) - new Date(a.not_after || 0)
+    );
+
     let html = '';
-    sortedCerts.slice(0, 5).forEach((cert, index) => {
-      const notBefore = new Date(cert.not_before);
-      const notAfter = new Date(cert.not_after);
-      const daysLeft = Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24));
+    sorted.slice(0, 5).forEach((cert, index) => {
+      const notBefore = cert.not_before ? new Date(cert.not_before) : null;
+      const notAfter  = cert.not_after  ? new Date(cert.not_after)  : null;
+      const daysLeft  = notAfter ? Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24)) : null;
 
       let statusClass = 'valid';
-      let statusText = '有效';
-      if (daysLeft < 0) {
-        statusClass = 'expired';
-        statusText = '已过期';
+      let statusText  = '有效';
+      if (daysLeft === null) {
+        statusClass = 'valid'; statusText = '证书有效';
+      } else if (daysLeft < 0) {
+        statusClass = 'expired'; statusText = '已过期';
       } else if (daysLeft <= 30) {
-        statusClass = 'expiring';
-        statusText = '即将过期';
+        statusClass = 'expiring'; statusText = '即将过期';
       }
 
-      const issuer = cert.issuer_name?.match(/O=([^,]+)/)?.[1] || cert.issuer_name?.match(/CN=([^,]+)/)?.[1] || '未知';
-      const cn = cert.common_name || hostname;
+      const issuerCN = cert.issuer?.friendly_name || cert.issuer?.name || '未知';
+      const dnsNames = cert.dns_names?.join(', ') || hostname;
 
       html += `
-        <div style="padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
-          ${sortedCerts.length > 1 ? `<div style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:8px;">证书 #${index + 1}</div>` : ''}
+        <div style="padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+          ${sorted.length > 1 ? `<div style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:8px;">证书 #${index + 1}</div>` : ''}
           <div class="info-row">
             <span class="info-label">状态</span>
             <span class="info-value ${statusClass}">${statusText}</span>
           </div>
           <div class="info-row">
             <span class="info-label">颁发机构</span>
-            <span class="info-value">${escapeHtml(issuer)}</span>
+            <span class="info-value">${escapeHtml(issuerCN)}</span>
           </div>
           <div class="info-row">
             <span class="info-label">颁发对象</span>
-            <span class="info-value" style="font-size:11px;">${escapeHtml(cn)}</span>
+            <span class="info-value" style="font-size:11px;">${escapeHtml(dnsNames)}</span>
           </div>
           <div class="info-row">
             <span class="info-label">生效时间</span>
-            <span class="info-value">${formatDate(notBefore)}</span>
+            <span class="info-value">${notBefore ? formatDate(notBefore) : '-'}</span>
           </div>
           <div class="info-row">
             <span class="info-label">到期时间</span>
-            <span class="info-value ${statusClass}">${formatDate(notAfter)}</span>
+            <span class="info-value ${statusClass}">${notAfter ? formatDate(notAfter) : '-'}</span>
           </div>
           <div class="info-row">
             <span class="info-label">剩余有效期</span>
-            <span class="info-value ${statusClass}">${daysLeft < 0 ? '已过期' : daysLeft + ' 天'}</span>
+            <span class="info-value ${statusClass}">${daysLeft === null ? '-' : daysLeft < 0 ? '已过期' : daysLeft + ' 天'}</span>
           </div>
           <div class="info-row">
-            <span class="info-label">序列号</span>
-            <span class="info-value" style="font-size:10px;color:rgba(255,255,255,0.5);">${cert.serial_number || '-'}</span>
+            <span class="info-label">证书 ID</span>
+            <span class="info-value" style="font-size:10px;color:rgba(255,255,255,0.5);">${cert.id || '-'}</span>
           </div>
         </div>
       `;
     });
 
-    if (sortedCerts.length > 5) {
-      html += `<div style="text-align:center;padding:8px;font-size:11px;color:rgba(255,255,255,0.4);">还有 ${sortedCerts.length - 5} 个历史证书</div>`;
+    if (sorted.length > 5) {
+      html += `<div style="text-align:center;padding:8px;font-size:11px;color:rgba(255,255,255,0.4);">还有 ${sorted.length - 5} 个历史证书</div>`;
     }
 
     // 存储证书数据供复制使用
-    currentCertData = sortedCerts.slice(0, 5);
-
+    currentCertData = sorted.slice(0, 5);
     detailsEl.innerHTML = html;
 
   } catch (e) {
@@ -262,11 +262,12 @@ async function copyAllCertInfo() {
 
   if (currentCertData && currentCertData.length > 0) {
     currentCertData.forEach((cert, index) => {
-      const notBefore = new Date(cert.not_before);
-      const notAfter = new Date(cert.not_after);
-      const daysLeft = Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24));
-      const issuer = cert.issuer_name?.match(/O=([^,]+)/)?.[1] || cert.issuer_name?.match(/CN=([^,]+)/)?.[1] || '未知';
-      const status = daysLeft < 0 ? '已过期' : daysLeft <= 30 ? '即将过期' : '有效';
+      const notBefore = cert.not_before ? new Date(cert.not_before) : null;
+      const notAfter  = cert.not_after  ? new Date(cert.not_after)  : null;
+      const daysLeft  = notAfter ? Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24)) : null;
+      const issuerCN  = cert.issuer?.friendly_name || cert.issuer?.name || '未知';
+      const dnsNames  = cert.dns_names?.join(', ') || currentHostname;
+      const status    = daysLeft === null ? '证书有效' : daysLeft < 0 ? '已过期' : daysLeft <= 30 ? '即将过期' : '有效';
 
       if (currentCertData.length > 1) {
         text += `【证书 #${index + 1}】\n`;
@@ -274,12 +275,12 @@ async function copyAllCertInfo() {
         text += `【证书详情】\n`;
       }
       text += `状态：${status}\n`;
-      text += `颁发机构：${issuer}\n`;
-      text += `颁发对象：${cert.common_name || currentHostname}\n`;
-      text += `生效时间：${formatDate(notBefore)}\n`;
-      text += `到期时间：${formatDate(notAfter)}\n`;
-      text += `剩余有效期：${daysLeft < 0 ? '已过期' : daysLeft + ' 天'}\n`;
-      text += `证书序列号：${cert.serial_number || '-'}\n`;
+      text += `颁发机构：${issuerCN}\n`;
+      text += `颁发对象：${dnsNames}\n`;
+      text += `生效时间：${notBefore ? formatDate(notBefore) : '-'}\n`;
+      text += `到期时间：${notAfter ? formatDate(notAfter) : '-'}\n`;
+      text += `剩余有效期：${daysLeft === null ? '-' : daysLeft < 0 ? '已过期' : daysLeft + ' 天'}\n`;
+      text += `证书ID：${cert.id || '-'}\n`;
       if (index < currentCertData.length - 1) text += '\n';
     });
   } else {

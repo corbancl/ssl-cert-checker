@@ -9,7 +9,7 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://crt.sh/*"
+    "https://api.certspotter.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
