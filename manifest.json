@@ -5,7 +5,8 @@
   "description": "一键查询当前网站的SSL证书信息，包括颁发机构、有效期、加密算法等",
   "permissions": [
     "activeTab",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "action": {
     "default_popup": "popup.html",
