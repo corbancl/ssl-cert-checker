@@ -1,5 +1,17 @@
 document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('refreshBtn').addEventListener('click', loadCertInfo);
+  const refreshBtn = document.getElementById('refreshBtn');
+  refreshBtn.addEventListener('click', async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.url) {
+        const url = new URL(tab.url);
+        const crtUrl = `https://crt.sh/?q=${encodeURIComponent(url.hostname)}`;
+        chrome.tabs.create({ url: crtUrl });
+      }
+    } catch (e) {
+      // ignore
+    }
+  });
   loadCertInfo();
 });
 
