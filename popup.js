@@ -1,8 +1,10 @@
 document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('copyBtn').addEventListener('click', copyAllCertInfo);
   loadCertInfo();
 });
 
 let currentHostname = '';
+let currentCertData = null;
 
 async function loadCertInfo() {
   const content = document.getElementById('content');
@@ -80,6 +82,9 @@ async function renderCertInfo(hostname) {
 
   // 获取详细证书信息
   await fetchDetailedCert(hostname);
+
+  // 显示复制按钮
+  document.getElementById('copyBtn').classList.remove('hidden');
 }
 
 async function fetchDetailedCert(hostname) {
@@ -170,6 +175,9 @@ async function fetchDetailedCert(hostname) {
       html += `<div style="text-align:center;padding:8px;font-size:11px;color:rgba(255,255,255,0.4);">还有 ${sortedCerts.length - 5} 个历史证书</div>`;
     }
 
+    // 存储证书数据供复制使用
+    currentCertData = sortedCerts.slice(0, 5);
+
     detailsEl.innerHTML = html;
 
   } catch (e) {
@@ -238,4 +246,57 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+async function copyAllCertInfo() {
+  const now = new Date();
+  let text = `SSL证书信息 - ${currentHostname}\n`;
+  text += `查询时间：${formatDate(now)}\n`;
+  text += `${'='.repeat(40)}\n\n`;
+
+  text += `【连接信息】\n`;
+  text += `协议：HTTPS\n`;
+  text += `域名：${currentHostname}\n`;
+  text += `端口：443\n\n`;
+
+  if (currentCertData && currentCertData.length > 0) {
+    currentCertData.forEach((cert, index) => {
+      const notBefore = new Date(cert.not_before);
+      const notAfter = new Date(cert.not_after);
+      const daysLeft = Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24));
+      const issuer = cert.issuer_name?.match(/O=([^,]+)/)?.[1] || cert.issuer_name?.match(/CN=([^,]+)/)?.[1] || '未知';
+      const status = daysLeft < 0 ? '已过期' : daysLeft <= 30 ? '即将过期' : '有效';
+
+      if (currentCertData.length > 1) {
+        text += `【证书 #${index + 1}】\n`;
+      } else {
+        text += `【证书详情】\n`;
+      }
+      text += `状态：${status}\n`;
+      text += `颁发机构：${issuer}\n`;
+      text += `颁发对象：${cert.common_name || currentHostname}\n`;
+      text += `生效时间：${formatDate(notBefore)}\n`;
+      text += `到期时间：${formatDate(notAfter)}\n`;
+      text += `剩余有效期：${daysLeft < 0 ? '已过期' : daysLeft + ' 天'}\n`;
+      text += `证书序列号：${cert.serial_number || '-'}\n`;
+      if (index < currentCertData.length - 1) text += '\n';
+    });
+  } else {
+    text += `【证书详情】\n`;
+    text += `状态：证书有效（详细信息不可用）\n`;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = document.getElementById('copyBtn');
+    const span = btn.querySelector('span');
+    btn.classList.add('copied');
+    span.textContent = '已复制！';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      span.textContent = '复制证书信息';
+    }, 2000);
+  } catch (e) {
+    alert('复制失败，请手动复制');
+  }
 }
