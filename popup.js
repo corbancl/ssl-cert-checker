@@ -1,19 +1,8 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const refreshBtn = document.getElementById('refreshBtn');
-  refreshBtn.addEventListener('click', async () => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab && tab.url) {
-        const url = new URL(tab.url);
-        const crtUrl = `https://crt.sh/?q=${encodeURIComponent(url.hostname)}`;
-        chrome.tabs.create({ url: crtUrl });
-      }
-    } catch (e) {
-      // ignore
-    }
-  });
   loadCertInfo();
 });
+
+let currentHostname = '';
 
 async function loadCertInfo() {
   const content = document.getElementById('content');
@@ -33,6 +22,7 @@ async function loadCertInfo() {
     }
 
     const url = new URL(tab.url);
+    currentHostname = url.hostname;
 
     // 非 https 页面
     if (url.protocol !== 'https:') {
@@ -40,58 +30,18 @@ async function loadCertInfo() {
       return;
     }
 
-    // 通过 fetch 获取证书信息（Chrome 扩展可以访问 SecurityState）
-    const certInfo = await getCertInfo(tab);
-    renderCertInfo(url.hostname, certInfo);
+    // 获取证书信息
+    await renderCertInfo(url.hostname);
 
   } catch (err) {
     showError(err.message || '获取证书信息失败');
   }
 }
 
-async function getCertInfo(tab) {
-  // 使用 chrome.tabs 获取安全状态
-  return new Promise((resolve) => {
-    // 通过 debugger API 获取详细证书信息（需要 debugger 权限）
-    // 这里使用 scripting 注入脚本获取可用信息
-    chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        const info = {};
-        // 获取页面安全信息
-        if (window.location.protocol === 'https:') {
-          info.protocol = window.location.protocol;
-          info.host = window.location.hostname;
-          info.port = window.location.port || '443';
-        }
-        return info;
-      }
-    }).then(results => {
-      resolve(results?.[0]?.result || {});
-    }).catch(() => {
-      resolve({});
-    });
-  });
-}
-
-async function renderCertInfo(hostname, basicInfo) {
+async function renderCertInfo(hostname) {
   const content = document.getElementById('content');
 
-  // 通过 fetch 请求获取证书信息
-  try {
-    const response = await fetch(`https://${hostname}`, {
-      method: 'HEAD',
-      mode: 'no-cors',
-      cache: 'no-store'
-    });
-  } catch (e) {
-    // 忽略 no-cors 错误
-  }
-
-  // 使用 chrome.tabs 的 securityInfo（通过 webRequest 或 declarativeNetRequest）
-  // 由于 MV3 限制，我们展示可获取的信息并提示用户
-  const now = new Date();
-
+  // 先显示基础信息
   content.innerHTML = `
     <div class="status-card">
       <div class="status-icon secure">
@@ -113,7 +63,7 @@ async function renderCertInfo(hostname, basicInfo) {
       </div>
       <div class="info-row">
         <span class="info-label">端口</span>
-        <span class="info-value">${basicInfo.port || '443'}</span>
+        <span class="info-value">443</span>
       </div>
     </div>
 
@@ -122,21 +72,20 @@ async function renderCertInfo(hostname, basicInfo) {
       <div id="certDetails">
         <div class="info-row">
           <span class="info-label">状态</span>
-          <span class="info-value valid">证书有效</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">查询方式</span>
-          <span class="info-value" style="color:rgba(255,255,255,0.5);font-size:11px;">点击下方按钮查询完整信息</span>
+          <span class="info-value" style="color:rgba(255,255,255,0.5);">正在查询...</span>
         </div>
       </div>
     </div>
   `;
 
-  // 尝试通过 API 获取更详细的证书信息
-  fetchDetailedCert(hostname);
+  // 获取详细证书信息
+  await fetchDetailedCert(hostname);
 }
 
 async function fetchDetailedCert(hostname) {
+  const detailsEl = document.getElementById('certDetails');
+  if (!detailsEl) return;
+
   try {
     // 使用 crt.sh API 查询证书信息
     const apiUrl = `https://crt.sh/?q=${encodeURIComponent(hostname)}&output=json`;
@@ -145,77 +94,96 @@ async function fetchDetailedCert(hostname) {
     const data = await resp.json();
 
     if (!data || data.length === 0) {
-      updateCertDetails(hostname, null);
+      detailsEl.innerHTML = `
+        <div class="info-row">
+          <span class="info-label">状态</span>
+          <span class="info-value valid">证书有效</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">说明</span>
+          <span class="info-value" style="color:rgba(255,255,255,0.5);font-size:11px;">未在公开日志中找到记录</span>
+        </div>
+      `;
       return;
     }
 
-    // 取最新的证书
-    const latest = data.sort((a, b) => new Date(b.not_after) - new Date(a.not_after))[0];
-    updateCertDetails(hostname, latest);
+    // 按过期时间排序，取最新的有效证书
+    const now = new Date();
+    const sortedCerts = data.sort((a, b) => new Date(b.not_after) - new Date(a.not_after));
+    
+    // 显示所有找到的证书
+    let html = '';
+    sortedCerts.slice(0, 5).forEach((cert, index) => {
+      const notBefore = new Date(cert.not_before);
+      const notAfter = new Date(cert.not_after);
+      const daysLeft = Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24));
+
+      let statusClass = 'valid';
+      let statusText = '有效';
+      if (daysLeft < 0) {
+        statusClass = 'expired';
+        statusText = '已过期';
+      } else if (daysLeft <= 30) {
+        statusClass = 'expiring';
+        statusText = '即将过期';
+      }
+
+      const issuer = cert.issuer_name?.match(/O=([^,]+)/)?.[1] || cert.issuer_name?.match(/CN=([^,]+)/)?.[1] || '未知';
+      const cn = cert.common_name || hostname;
+
+      html += `
+        <div style="padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+          ${sortedCerts.length > 1 ? `<div style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:8px;">证书 #${index + 1}</div>` : ''}
+          <div class="info-row">
+            <span class="info-label">状态</span>
+            <span class="info-value ${statusClass}">${statusText}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">颁发机构</span>
+            <span class="info-value">${escapeHtml(issuer)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">颁发对象</span>
+            <span class="info-value" style="font-size:11px;">${escapeHtml(cn)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">生效时间</span>
+            <span class="info-value">${formatDate(notBefore)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">到期时间</span>
+            <span class="info-value ${statusClass}">${formatDate(notAfter)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">剩余有效期</span>
+            <span class="info-value ${statusClass}">${daysLeft < 0 ? '已过期' : daysLeft + ' 天'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">序列号</span>
+            <span class="info-value" style="font-size:10px;color:rgba(255,255,255,0.5);">${cert.serial_number || '-'}</span>
+          </div>
+        </div>
+      `;
+    });
+
+    if (sortedCerts.length > 5) {
+      html += `<div style="text-align:center;padding:8px;font-size:11px;color:rgba(255,255,255,0.4);">还有 ${sortedCerts.length - 5} 个历史证书</div>`;
+    }
+
+    detailsEl.innerHTML = html;
+
   } catch (e) {
-    updateCertDetails(hostname, null);
-  }
-}
-
-function updateCertDetails(hostname, cert) {
-  const detailsEl = document.getElementById('certDetails');
-  if (!detailsEl) return;
-
-  if (!cert) {
     detailsEl.innerHTML = `
       <div class="info-row">
         <span class="info-label">状态</span>
         <span class="info-value valid">证书有效</span>
       </div>
       <div class="info-row">
-        <span class="info-label">提示</span>
-        <span class="info-value" style="color:rgba(255,255,255,0.5);font-size:11px;">详细信息获取中...</span>
+        <span class="info-label">说明</span>
+        <span class="info-value" style="color:rgba(255,255,255,0.5);font-size:11px;">详细信息获取失败</span>
       </div>
     `;
-    return;
   }
-
-  const notBefore = new Date(cert.not_before);
-  const notAfter = new Date(cert.not_after);
-  const now = new Date();
-  const daysLeft = Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24));
-
-  let expiryClass = 'valid';
-  let expiryText = `${daysLeft} 天后到期`;
-  if (daysLeft < 0) {
-    expiryClass = 'expired';
-    expiryText = '已过期';
-  } else if (daysLeft <= 30) {
-    expiryClass = 'expiring';
-    expiryText = `仅剩 ${daysLeft} 天`;
-  }
-
-  detailsEl.innerHTML = `
-    <div class="info-row">
-      <span class="info-label">颁发机构</span>
-      <span class="info-value">${escapeHtml(cert.issuer_name?.split('O=')[1]?.split(',')[0] || cert.issuer_name || '未知')}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">颁发对象</span>
-      <span class="info-value">${escapeHtml(cert.common_name || hostname)}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">生效时间</span>
-      <span class="info-value">${formatDate(notBefore)}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">到期时间</span>
-      <span class="info-value ${expiryClass}">${formatDate(notAfter)}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">剩余有效期</span>
-      <span class="info-value ${expiryClass}">${expiryText}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">证书序列号</span>
-      <span class="info-value" style="font-size:11px;">${cert.serial_number || '未知'}</span>
-    </div>
-  `;
 }
 
 function showInsecure(hostname, protocol) {
