@@ -8,6 +8,9 @@
     "tabs",
     "scripting"
   ],
+  "host_permissions": [
+    "https://crt.sh/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "SSL证书查询助手",

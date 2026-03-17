@@ -181,6 +181,7 @@ async function fetchDetailedCert(hostname) {
     detailsEl.innerHTML = html;
 
   } catch (e) {
+    console.error('fetchDetailedCert error:', e);
     detailsEl.innerHTML = `
       <div class="info-row">
         <span class="info-label">状态</span>
@@ -188,7 +189,7 @@ async function fetchDetailedCert(hostname) {
       </div>
       <div class="info-row">
         <span class="info-label">说明</span>
-        <span class="info-value" style="color:rgba(255,255,255,0.5);font-size:11px;">详细信息获取失败</span>
+        <span class="info-value" style="color:rgba(255,255,255,0.5);font-size:11px;">网络请求失败，请检查网络</span>
       </div>
     `;
   }
